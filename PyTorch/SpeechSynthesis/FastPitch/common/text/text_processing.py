@@ -3,9 +3,8 @@ import re
 import numpy as np
 from . import cleaners
 from .symbols import get_symbols
-from .cmudict import CMUDict
+from .cmudict import cmudict
 from .numerical import _currency_re, _expand_currency
-
 
 #########
 # REGEX #
@@ -28,7 +27,7 @@ def lines_to_list(filename):
     return lines
 
 
-class TextProcessing(object):
+class DefaultTextProcessing(object):
     def __init__(self, symbol_set, cleaner_names, p_arpabet=0.0,
                  handle_arpabet='word', handle_arpabet_ambiguous='ignore',
                  expand_currency=True):
@@ -55,6 +54,7 @@ class TextProcessing(object):
             if not m:
                 sequence += self.symbols_to_sequence(text)
                 break
+
             sequence += self.symbols_to_sequence(m.group(1))
             sequence += self.arpabet_to_sequence(m.group(2))
             text = m.group(3)
@@ -173,3 +173,35 @@ class TextProcessing(object):
             return text_encoded, text_clean, text_arpabet
 
         return text_encoded
+
+
+class DictTextProcessing(object):
+    def __init__(self, dict_file):
+        print(dict_file)
+        with open(dict_file) as f_in:
+            self.symbols = ["_"] + [l.strip() for l in f_in]
+
+        # Mappings from symbol to numeric ID and vice versa:
+        self.symbol_to_id = {s: i for i, s in enumerate(self.symbols)}
+        self.id_to_symbol = {i: s for i, s in enumerate(self.symbols)}
+
+
+    def encode_text(self, text):
+        return self.text_to_sequence(text)
+
+    def text_to_sequence(self, text):
+        sequence = []
+
+        # Check for curly braces and treat their contents as ARPAbet:
+        for symbol in text.split(" "):
+            sequence.append(self.symbol_to_id[symbol])
+        return sequence
+
+    def sequence_to_text(self, sequence):
+        result = []
+
+        # Check for curly braces and treat their contents as ARPAbet:
+        for id in text.split(" "):
+            sequence.append(self.id_to_symbol[id])
+
+        return " ".join(result)

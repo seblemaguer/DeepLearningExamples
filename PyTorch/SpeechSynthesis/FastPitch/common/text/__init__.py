@@ -1,3 +1,1 @@
-from .cmudict import CMUDict
-
-cmudict = CMUDict()
+from .cmudict import cmudict

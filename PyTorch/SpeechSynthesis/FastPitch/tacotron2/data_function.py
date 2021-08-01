@@ -43,9 +43,8 @@ class TextMelLoader(torch.utils.data.Dataset):
     def __init__(self,
                  dataset_path,
                  audiopaths_and_text,
-                 text_cleaners,
                  n_mel_channels,
-                 symbol_set='english_basic',
+                 text_processing,
                  n_speakers=1,
                  load_mel_from_disk=True,
                  max_wav_value=None,
@@ -59,6 +58,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.audiopaths_and_text = load_filepaths_and_text(
             dataset_path, audiopaths_and_text,
             has_speakers=(n_speakers > 1))
+        self.text_processing = text_processing
         self.load_mel_from_disk = load_mel_from_disk
         if not load_mel_from_disk:
             self.max_wav_value = max_wav_value
@@ -79,6 +79,7 @@ class TextMelLoader(torch.utils.data.Dataset):
             melspec = self.stft.mel_spectrogram(audio_norm)
             melspec = torch.squeeze(melspec, 0)
         else:
+            filename = filename.replace(".wav", ".pt").replace("wavn", "mels") # FIXME: dirty hack
             melspec = torch.load(filename)
             # assert melspec.size(0) == self.stft.n_mel_channels, (
             #     'Mel dimension mismatch: given {}, expected {}'.format(
@@ -87,7 +88,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         return melspec
 
     def get_text(self, text):
-        text_encoded = torch.IntTensor(self.tp.encode_text(text))
+        text_encoded = torch.IntTensor(self.text_processing.encode_text(text))
         return text_encoded
 
     def __getitem__(self, index):

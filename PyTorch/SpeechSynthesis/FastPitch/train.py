@@ -55,9 +55,13 @@ import amp_C
 
 import common
 import data_functions
+from common.text import text_processing
 import loss_functions
 import models
 
+import matplotlib.pyplot as plt
+
+NUM_WORKERS = 4
 
 def parse_args(parser):
     """
@@ -123,6 +127,8 @@ def parse_args(parser):
                          help='Type of text cleaners for input text')
     dataset.add_argument('--symbol-set', type=str, default='english_basic',
                          help='Define symbol set for input text')
+    dataset.add_argument('--symbol-dict', default=None, type=str,
+                         help='Symbol dictionnary (the text is therefore assumed to be a list of space separated symbols, no cleaner will be used here!)')
 
     cond = parser.add_argument_group('conditioning on additional attributes')
     cond.add_argument('--n-speakers', type=int, default=1,
@@ -218,7 +224,7 @@ def load_checkpoint(local_rank, model, ema_model, optimizer, epoch, total_iter,
 
 def validate(model, epoch, total_iter, criterion, valset, batch_size,
              collate_fn, distributed_run, batch_to_gpu, use_gt_durations=False,
-             ema=False):
+             ema=False, local_rank=0):
     """Handles all the validation scoring and printing"""
     was_training = model.training
     model.eval()
@@ -226,7 +232,7 @@ def validate(model, epoch, total_iter, criterion, valset, batch_size,
     tik = time.perf_counter()
     with torch.no_grad():
         val_sampler = DistributedSampler(valset) if distributed_run else None
-        val_loader = DataLoader(valset, num_workers=8, shuffle=False,
+        val_loader = DataLoader(valset, num_workers=NUM_WORKERS, shuffle=False,
                                 sampler=val_sampler,
                                 batch_size=batch_size, pin_memory=False,
                                 collate_fn=collate_fn)
@@ -246,6 +252,24 @@ def validate(model, epoch, total_iter, criterion, valset, batch_size,
                     val_meta[k] += v
                 val_num_frames = num_frames.item()
 
+            if (i == 0) and (local_rank == 0):
+                # Plot some debug information
+                pred_mel = y_pred[0][0, :, :].cpu().detach().numpy().astype(np.float32).T
+                orig_mel = y[0][0, :, :].cpu().detach().numpy().astype(np.float32)
+                f0_pred = y_pred[4][0, :].cpu().detach().numpy().astype(np.float32)
+                f0_ori = x[6][0,:].cpu().detach().numpy().astype(np.float32)
+                dur_pred = y_pred[2][0, :].cpu().detach().numpy().astype(np.float32)
+                dur_ori = x[4][0,:].cpu().detach().numpy().astype(np.float32)
+                print(f"duration = (dur_ori={dur_ori.sum()}, dur_pred={dur_pred.sum()}, size(pred_mel)={pred_mel.shape}, size(orig_mel)={orig_mel.shape})")
+                fig, axs = plt.subplots(2, 2, figsize=(21,14))
+                axs[0,0].imshow(orig_mel, aspect='auto', origin='lower', interpolation='nearest')
+                axs[1,0].imshow(pred_mel, aspect='auto', origin='lower', interpolation='nearest')
+                axs[0,1].plot(dur_ori)
+                axs[0,1].plot(dur_pred)
+                axs[1,1].plot(f0_ori)
+                axs[1,1].plot(f0_pred)
+                fig.savefig(f'debug_epoch/{epoch:06d}.png', bbox_inches='tight')
+
         val_meta = {k: v / len(valset) for k,v in val_meta.items()}
 
     val_meta['took'] = time.perf_counter() - tik
@@ -256,6 +280,9 @@ def validate(model, epoch, total_iter, criterion, valset, batch_size,
                data=OrderedDict([
                    ('loss', val_meta['loss'].item()),
                    ('mel_loss', val_meta['mel_loss'].item()),
+                   ('duration_predictor_loss', val_meta['duration_predictor_loss'].item()),
+                   ('dur_error', val_meta['dur_error'].item()),
+                   ('pitch_loss', val_meta['pitch_loss'].item()),
                    ('frames/s', num_frames.item() / val_meta['took']),
                    ('took', val_meta['took'])]),
     )
@@ -387,19 +414,25 @@ def main():
         dur_predictor_loss_scale=args.dur_predictor_loss_scale,
         pitch_predictor_loss_scale=args.pitch_predictor_loss_scale)
 
+    if args.symbol_dict:
+        text_proc = text_processing.DictTextProcessing(args.symbol_dict)
+    else:
+        text_proc = text_processing.DefaultTextProcessing("english_basic", args.text_cleaners)
     collate_fn = data_functions.get_collate_function('FastPitch')
+
     trainset = data_functions.get_data_loader('FastPitch',
                                               audiopaths_and_text=args.training_files,
-                                              **vars(args))
+                                              text_processing=text_proc, **vars(args))
     valset = data_functions.get_data_loader('FastPitch',
-                                            audiopaths_and_text=args.validation_files,
-                                            **vars(args))
+                                              audiopaths_and_text=args.validation_files,
+                                              text_processing=text_proc, **vars(args))
+
     if distributed_run:
         train_sampler, shuffle = DistributedSampler(trainset), False
     else:
         train_sampler, shuffle = None, True
 
-    train_loader = DataLoader(trainset, num_workers=16, shuffle=shuffle,
+    train_loader = DataLoader(trainset, num_workers=NUM_WORKERS, shuffle=shuffle,
                               sampler=train_sampler, batch_size=args.batch_size,
                               pin_memory=False, drop_last=True,
                               collate_fn=collate_fn)
@@ -530,7 +563,7 @@ def main():
 
         validate(model, epoch, total_iter, criterion, valset, args.batch_size,
                  collate_fn, distributed_run, batch_to_gpu,
-                 use_gt_durations=True)
+                 use_gt_durations=True, local_rank=args.local_rank)
 
         if args.ema_decay > 0:
             validate(ema_model, epoch, total_iter, criterion, valset,

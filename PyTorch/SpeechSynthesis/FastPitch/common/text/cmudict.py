@@ -75,3 +75,5 @@ def _get_pronunciation(s):
     if part not in _valid_symbol_set:
       return None
   return ' '.join(parts)
+
+cmudict = CMUDict()

@@ -31,7 +31,7 @@ import torch
 
 from common.utils import to_gpu
 from tacotron2.data_function import TextMelLoader
-from common.text.text_processing import TextProcessing
+# from common.text.text_processing import TextProcessing
 
 
 class TextMelAliLoader(TextMelLoader):
@@ -39,12 +39,11 @@ class TextMelAliLoader(TextMelLoader):
     """
     def __init__(self, **kwargs):
         super(TextMelAliLoader, self).__init__(**kwargs)
-        self.tp = TextProcessing(kwargs['symbol_set'], kwargs['text_cleaners'])
-        self.n_speakers = kwargs['n_speakers']
+        self.n_speakers = kwargs["n_speakers"]
         if len(self.audiopaths_and_text[0]) != 4 + (kwargs['n_speakers'] > 1):
             raise ValueError('Expected four columns in audiopaths file for single speaker model. \n'
-                             'For multispeaker model, the filelist format is '
-                             '<mel>|<dur>|<pitch>|<text>|<speaker_id>')
+                    'For multispeaker model, the filelist format is '
+                    '<mel>|<dur>|<pitch>|<text>|<speaker_id>')
 
     def __getitem__(self, index):
         # separate filename and text
@@ -54,11 +53,13 @@ class TextMelAliLoader(TextMelLoader):
         else:
             audiopath, durpath, pitchpath, text = self.audiopaths_and_text[index]
             speaker = None
-        len_text = len(text)
+        orig_text = text
         text = self.get_text(text)
+        len_text = len(text)
         mel = self.get_mel(audiopath)
         dur = torch.load(durpath)
         pitch = torch.load(pitchpath)
+        # print(f"filename = {audiopath}, len_text = {len_text}, dur_infos = ({dur.shape}, {dur.sum()}), pitch_info=({pitch.shape}), mel_shape=({mel.shape}), text= {text.shape}")
         return (text, mel, len_text, dur, pitch, speaker)
 
 
@@ -76,8 +77,8 @@ class TextMelAliCollate():
         """
         # Right zero-pad all one-hot text sequences to max input length
         input_lengths, ids_sorted_decreasing = torch.sort(
-            torch.LongTensor([len(x[0]) for x in batch]),
-            dim=0, descending=True)
+                torch.LongTensor([len(x[0]) for x in batch]),
+                dim=0, descending=True)
         max_input_len = input_lengths[0]
 
         text_padded = torch.LongTensor(len(batch), max_input_len)
@@ -92,14 +93,14 @@ class TextMelAliCollate():
             dur = batch[ids_sorted_decreasing[i]][3]
             dur_padded[i, :dur.shape[0]] = dur
             dur_lens[i] = dur.shape[0]
-            assert dur_lens[i] == input_lengths[i]
+            assert dur_lens[i] == input_lengths[i], f"(i={i}) => (dur_len={dur_lens[i]}) != (input_len={input_lengths[i]})"
 
         # Right zero-pad mel-spec
         num_mels = batch[0][1].size(0)
         max_target_len = max([x[1].size(1) for x in batch])
         if max_target_len % self.n_frames_per_step != 0:
             max_target_len += (self.n_frames_per_step - max_target_len
-                               % self.n_frames_per_step)
+                    % self.n_frames_per_step)
             assert max_target_len % self.n_frames_per_step == 0
 
         # include mel padded and gate padded
@@ -111,8 +112,7 @@ class TextMelAliCollate():
             mel_padded[i, :, :mel.size(1)] = mel
             output_lengths[i] = mel.size(1)
 
-        pitch_padded = torch.zeros(dur_padded.size(0), dur_padded.size(1),
-                                   dtype=batch[0][4].dtype)
+        pitch_padded = torch.zeros(dur_padded.size(0), dur_padded.size(1), dtype=batch[0][4].dtype)
         for i in range(len(ids_sorted_decreasing)):
             pitch = batch[ids_sorted_decreasing[i]][4]
             pitch_padded[i, :pitch.shape[0]] = pitch
@@ -144,9 +144,11 @@ def batch_to_gpu(batch):
     pitch_padded = to_gpu(pitch_padded).float()
     if speaker is not None:
         speaker = to_gpu(speaker).long()
+
     # Alignments act as both inputs and targets - pass shallow copies
     x = [text_padded, input_lengths, mel_padded, output_lengths,
          dur_padded, dur_lens, pitch_padded, speaker]
     y = [mel_padded, dur_padded, dur_lens, pitch_padded]
     len_x = torch.sum(output_lengths)
+
     return (x, y, len_x)
